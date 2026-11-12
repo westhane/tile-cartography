@@ -10,7 +10,7 @@
   },
   "authors": [{ "name": "westhane" }],
   "esmodules": ["scripts/main.js"],
-  "url": "https://github.com/westhane/TileCartography",
-  "manifest": "https://github.com/westhane/TileCartography/releases/latest/download/module.json",
-  "download": "https://github.com/westhane/TileCartography/releases/download/v0.1.0/module.zip"
+  "url": "https://github.com/westhane/tile-cartography",
+  "manifest": "https://github.com/westhane/tile-cartography/releases/latest/download/module.json",
+  "download": "https://github.com/westhane/tile-cartography/releases/download/v0.1.0/module.zip"
 }

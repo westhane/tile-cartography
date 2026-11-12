@@ -17,11 +17,15 @@ Status: **step 1 of 6**. The module loads and logs to the console. Nothing is dr
 
 Requires libvips (`sudo apt install libvips-tools`).
 
+Run `tools/cut-tiles.sh` with no arguments (or double-click it) and it asks for the map image. Tab completes paths, and you can drag the file into the terminal. It then lists the WebP quality options and asks for one; press Enter for the default, 75. Or pass everything directly:
+
 ```bash
-tools/cut-tiles.sh path/to/world-map.png tiles/world-map 512
+tools/cut-tiles.sh path/to/world-map.png [output-dir] [tile-size] [quality]
 ```
 
-Upload `tiles/world-map_files/` and `tiles/world-map.dzi` to the Forge Assets Library. Map images and tiles are git-ignored and never go into this repo.
+Output goes to a `<map-name>-tiles/` folder next to the map image, holding `<map-name>.dzi` and `<map-name>_files/`. Tiles are 512 px WebP at maximum compression effort. Zoom levels smaller than one tile are removed, except the largest of them, which serves as the overview. The remaining levels keep standard Deep Zoom numbering, so the overview level is not 0.
+
+Upload the whole output folder to the Forge Assets Library. Map images and tiles are git-ignored and never go into this repo.
 
 ## Roadmap
 
@@ -35,7 +39,7 @@ Upload `tiles/world-map_files/` and `tiles/world-map.dzi` to the Forge Assets Li
 ## Install
 
 Manifest URL (after the first release):
-`https://github.com/westhane/TileCartography/releases/latest/download/module.json`
+`https://github.com/westhane/tile-cartography/releases/latest/download/module.json`
 
 ## Releasing
 
