@@ -1,0 +1,36 @@
+# On a published GitHub Release (tag vX.Y.Z): stamp version + URLs into
+# module.json, zip the module, and attach both to the release.
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stamp module.json
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          VERSION="${TAG#v}"
+          jq --arg v "$VERSION" \
+             --arg m "https://github.com/$REPO/releases/latest/download/module.json" \
+             --arg d "https://github.com/$REPO/releases/download/$TAG/module.zip" \
+             '.version=$v | .manifest=$m | .download=$d' module.json > module.tmp
+          mv module.tmp module.json
+
+      - name: Build zip
+        run: zip -r module.zip module.json scripts README.md
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" module.json module.zip --clobber

@@ -1,0 +1,10 @@
+# Map images and generated tiles live on the Forge, never in this repo
+tiles/
+*.dzi
+*.png
+*.jpg
+*.jpeg
+*.webp
+
+# Build output
+module.zip
