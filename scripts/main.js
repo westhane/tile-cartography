@@ -1,6 +1,6 @@
-// Tile Cartography — step 3: draw the overview level of a Deep Zoom pyramid
-// over the scene background, then stream in the full-resolution tiles that
-// are on screen as you pan and zoom.
+// Tile Cartography — step 4: draw the overview level of a Deep Zoom pyramid
+// over the scene background, then stream in the tiles that are on screen, at
+// the level that matches the current zoom.
 //
 // Per scene, set the .dzi URL with:
 //   await canvas.scene.setFlag("tile-cartography", "dzi", "<url to .dzi>");
@@ -13,14 +13,21 @@ const MAX_CONCURRENT_LOADS = 6;
 const PREFETCH_TILES = 0.5;
 
 /**
+ * Shifts the level choice: 0 aims for about one tile pixel per screen pixel
+ * (between 0.7 and 1.4). +1 loads one level sharper (four times the tiles),
+ * -1 one level softer.
+ */
+const DETAIL_BIAS = 0;
+
+/**
  * State for the pyramid on the current canvas, or null.
  * @type {null | {
  *   scene: Scene, dzi: object, rect: PIXI.Rectangle, maxLevel: number,
- *   overview: PrimarySpriteMesh|null, detailLevel: number,
+ *   overview: PrimarySpriteMesh|null, overviewLevel: number, detailLevel: number|null,
  *   tiles: Map<string, PrimarySpriteMesh>, loading: Set<string>, failed: Set<string>,
- *   queue: Array<{key:string, col:number, row:number}>,
+ *   queue: Array<{key:string, level:number, col:number, row:number}>,
  *   sortBase: {elevation:number, sortLayer:number, sort:number, zIndex:number}|null,
- *   started: number, reported: boolean
+ *   levelSince: number, reported: boolean
  * }}
  */
 let state = null;
@@ -102,7 +109,8 @@ function tileUrl(dzi, level, col, row) {
 async function setup(canvas) {
   teardown();
   const scene = canvas.scene;
-  const url = scene?.getFlag(MODULE_ID, "dzi");
+  // Read the flag directly: getFlag throws when the module is not active (as when testing a pasted copy).
+  const url = scene?.flags?.[MODULE_ID]?.dzi;
   if (!url) return;
 
   const started = performance.now();
@@ -110,26 +118,27 @@ async function setup(canvas) {
   if (canvas.scene !== scene) return;
 
   const maxLevel = Math.ceil(Math.log2(Math.max(dzi.width, dzi.height)));
+  const level = overviewLevel(dzi);
   const bg = canvas.primary.background;
   state = {
     scene, dzi, maxLevel,
     rect: canvas.dimensions.sceneRect,
     overview: null,
-    detailLevel: maxLevel,
+    overviewLevel: level,
+    detailLevel: null,
     tiles: new Map(),
     loading: new Set(),
     failed: new Set(),
     queue: [],
     sortBase: bg ? { elevation: bg.elevation, sortLayer: bg.sortLayer, sort: bg.sort, zIndex: bg.zIndex } : null,
-    started,
-    reported: false
+    levelSince: started,
+    reported: true
   };
   const current = state;
 
   // Detail tiles can start loading while the overview does.
   scheduleUpdate();
 
-  const level = overviewLevel(dzi);
   const texture = await foundry.canvas.loadTexture(tileUrl(dzi, level, 0, 0));
   if (state !== current) return;
   if (!texture) throw new Error(`could not load the overview, level ${level}`);
@@ -155,7 +164,8 @@ function teardown() {
 /**
  * Add a sprite to the primary canvas group, sorted just above the scene's own
  * background (which stays underneath as a fallback).
- * @param {number} layer  1 for the overview, 2 for detail tiles.
+ * @param {number} layer  Higher layers draw on top: 1 for the overview, then
+ *   2 + level for detail tiles, so sharper levels cover softer ones.
  */
 function addMesh(texture, layer, x, y, width, height) {
   const mesh = new foundry.canvas.primary.PrimarySpriteMesh({ name: `${MODULE_ID}-${layer}`, texture });
@@ -197,8 +207,31 @@ function viewRect() {
   return { x0: tl.x, y0: tl.y, x1: br.x, y1: br.y };
 }
 
+/**
+ * The level whose pixels best match screen pixels at the current zoom, or null
+ * when the overview is already sharp enough.
+ */
+function chooseLevel() {
+  const { dzi, rect, maxLevel, overviewLevel } = state;
+  const screenPerWorld = canvas.stage.scale.x * canvas.app.renderer.resolution;
+  const imagePerScreen = (dzi.width / rect.width) / screenPerWorld;
+  const halvings = Math.round(Math.log2(imagePerScreen) - DETAIL_BIAS);
+  const level = Math.min(maxLevel, maxLevel - Math.max(0, halvings));
+  return level > overviewLevel ? level : null;
+}
+
 function updateVisibleTiles() {
   if (!state) return;
+  const level = chooseLevel();
+  if (level !== state.detailLevel) {
+    state.detailLevel = level;
+    state.levelSince = performance.now();
+    state.reported = false;
+  }
+  if (level === null) {
+    state.queue = [];
+    return;
+  }
   const { dzi, rect, maxLevel, detailLevel } = state;
   const info = levelInfo(dzi, maxLevel, detailLevel);
 
@@ -226,7 +259,7 @@ function updateVisibleTiles() {
     for (let col = c0; col <= c1; col++) {
       const key = `${detailLevel}/${col}_${row}`;
       if (state.tiles.has(key) || state.loading.has(key) || state.failed.has(key)) continue;
-      queue.push({ key, col, row, d: (col - cx) ** 2 + (row - cy) ** 2 });
+      queue.push({ key, level: detailLevel, col, row, d: (col - cx) ** 2 + (row - cy) ** 2 });
     }
   }
   queue.sort((a, b) => a.d - b.d);
@@ -238,17 +271,17 @@ function pumpQueue() {
   while (state && state.loading.size < MAX_CONCURRENT_LOADS && state.queue.length) {
     loadTile(state, state.queue.shift());
   }
-  if (state && !state.reported && !state.loading.size && !state.queue.length && state.tiles.size) {
+  if (state && !state.reported && !state.loading.size && !state.queue.length) {
     state.reported = true;
     console.log(
-      `${MODULE_ID} | ${state.tiles.size} detail tiles (level ${state.detailLevel}) on screen ` +
-      `${Math.round(performance.now() - state.started)} ms after the scene loaded`
+      `${MODULE_ID} | level ${state.detailLevel} on screen in ` +
+      `${Math.round(performance.now() - state.levelSince)} ms (${state.tiles.size} tiles loaded in total)`
     );
   }
 }
 
-async function loadTile(current, { key, col, row }) {
-  const { dzi, rect, maxLevel, detailLevel } = current;
+async function loadTile(current, { key, level: detailLevel, col, row }) {
+  const { dzi, rect, maxLevel } = current;
   current.loading.add(key);
   let texture = null;
   try {
@@ -268,7 +301,7 @@ async function loadTile(current, { key, col, row }) {
     const ly = row * dzi.tileSize - (row > 0 ? dzi.overlap : 0);
     const sx = (rect.width / dzi.width) * info.factor;
     const sy = (rect.height / dzi.height) * info.factor;
-    current.tiles.set(key, addMesh(texture, 2, rect.x + lx * sx, rect.y + ly * sy, texture.width * sx, texture.height * sy));
+    current.tiles.set(key, addMesh(texture, 2 + detailLevel, rect.x + lx * sx, rect.y + ly * sy, texture.width * sx, texture.height * sy));
   }
   pumpQueue();
 }
