@@ -2,13 +2,17 @@
 
 Foundry VTT (v13) module that shows a large scene background as a zoom-level tile pyramid, like a web map. Instead of loading one huge image, it loads a small overview first and streams in detail tiles as you pan and zoom.
 
-Status: **step 5 of 6**. Draws the overview level of a scene's tile pyramid over its background, streams in the tiles that are on screen at the level that matches the current zoom (loading ahead of drags and animated pans), and frees tiles that are no longer needed. Set the pyramid per scene from the console:
+Status: **all six roadmap steps done.** It draws the overview level of a scene's tile pyramid over its background, then streams in the tiles on screen at the level that matches the current zoom. It loads ahead of drags and animated pans, fades new tiles in, and frees tiles that are no longer needed.
 
-```js
-await canvas.scene.setFlag("tile-cartography", "dzi", "<url to .dzi>");
-```
+## Using it
 
-To see what is loaded (tiles per level, approximate GPU memory), run `game.modules.get("tile-cartography").api.stats()`.
+1. Cut the map with `tools/cut-tiles.sh` and upload the output folder to the Forge Assets Library (see below).
+2. In the scene's **Configure** sheet (Basics tab), pick the `.dzi` file in **Tile map (.dzi)**.
+3. Click **Fit scene to map** to set the scene size to the map's size and the background to the overview image, then save. That background is what players see while tile maps are off.
+
+Each user can turn tile maps off in **Configure Settings → Tile Cartography → Draw tile maps** (for example on a slow machine). It affects only that user.
+
+To see what is loaded (tiles per level, approximate GPU memory), run `game.modules.get("tile-cartography").api.stats()` in the console. You can also set the tile map from the console with `await canvas.scene.setFlag("tile-cartography", "dzi", "<url to .dzi>")`.
 
 ## Layout
 
@@ -40,7 +44,7 @@ Upload the whole output folder to the Forge Assets Library. Map images and tiles
 3. ✅ Load the visible detail tiles at one zoom level.
 4. ✅ Switch between zoom levels as you zoom.
 5. ✅ Unload tiles that go off screen.
-6. Polish: fade tiles in, add a settings panel, add an off switch with a low-res fallback background.
+6. ✅ Polish: fade tiles in, add a Tile map field to Scene Configuration, add an off switch with a low-res fallback background.
 
 ## Install
 

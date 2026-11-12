@@ -1,8 +1,8 @@
-// Tile Cartography — step 5: draw the overview level of a Deep Zoom pyramid
-// over the scene background, stream in the tiles that are on screen at the
-// level that matches the current zoom, and free tiles that are no longer needed.
+// Tile Cartography: draw the overview level of a Deep Zoom pyramid over the
+// scene background, stream in the tiles that are on screen at the level that
+// matches the current zoom, and free tiles that are no longer needed.
 //
-// Per scene, set the .dzi URL with:
+// Per scene, set the .dzi URL in Scene Configuration (Tile map), or with:
 //   await canvas.scene.setFlag("tile-cartography", "dzi", "<url to .dzi>");
 //
 // For a snapshot of what is loaded, run in the console:
@@ -34,6 +34,9 @@ const EVICT_DELAY_MS = 750;
 /** Hard ceiling on loaded tiles (a 512 px tile is about 1.3 MB of GPU memory). */
 const MAX_TILES = 192;
 
+/** How long a newly loaded tile takes to fade in. */
+const FADE_MS = 250;
+
 /**
  * @typedef {{x0:number, y0:number, x1:number, y1:number}} Box  A world-space rectangle.
  * @typedef {{mesh: PrimarySpriteMesh, level:number, bounds: Box, bytes:number}} Tile
@@ -59,6 +62,7 @@ let state = null;
 
 Hooks.once("init", () => {
   console.log(`${MODULE_ID} | init`);
+  registerSettings();
   const module = game.modules.get(MODULE_ID);
   if (module) module.api = { stats };
 });
@@ -76,8 +80,49 @@ Hooks.on("canvasPan", () => scheduleUpdate());
 
 Hooks.on("canvasTearDown", () => teardown());
 
-// A copy pasted into the console after the game is ready installs the pan watcher itself.
-if (globalThis.game?.ready) watchAnimatedPans();
+// Changing a scene's tile map doesn't redraw the canvas by itself.
+Hooks.on("updateScene", (scene, changes) => {
+  if (scene === canvas.scene && foundry.utils.hasProperty(changes, `flags.${MODULE_ID}`)) redraw();
+});
+
+Hooks.on("renderSceneConfig", (app, html) => addSceneConfigFields(app, html));
+
+// A copy pasted into the console after the game is ready sets itself up.
+if (globalThis.game?.ready) {
+  try { registerSettings(); } catch (err) { console.warn(`${MODULE_ID} | settings not registered`, err); }
+  watchAnimatedPans();
+}
+
+/* -------------------------------------------- */
+/*  Settings                                     */
+/* -------------------------------------------- */
+
+function registerSettings() {
+  game.settings.register(MODULE_ID, "enabled", {
+    name: "Draw tile maps",
+    hint: "Stream scene maps from their tile pyramids. Turn off to see each scene's normal background "
+      + "instead (for example on a slow machine). Affects only you.",
+    scope: "client",
+    config: true,
+    type: Boolean,
+    default: true,
+    onChange: () => redraw()
+  });
+}
+
+function isEnabled() {
+  try {
+    return game.settings.get(MODULE_ID, "enabled") !== false;
+  } catch {
+    return true; // Not registered, as in a pasted test copy.
+  }
+}
+
+/** Set up (or clear) the tile map for the current canvas. */
+function redraw() {
+  if (!canvas?.ready) return;
+  setup(canvas).catch((err) => console.error(`${MODULE_ID} | failed to set up`, err));
+}
 
 /* -------------------------------------------- */
 /*  Deep Zoom descriptor                         */
@@ -211,7 +256,7 @@ async function setup(canvas) {
   const scene = canvas.scene;
   // Read the flag directly: getFlag throws when the module is not active (as when testing a pasted copy).
   const url = scene?.flags?.[MODULE_ID]?.dzi;
-  if (!url) return;
+  if (!url || !isEnabled()) return;
 
   const started = performance.now();
   const dzi = await loadDzi(url);
@@ -260,6 +305,7 @@ function teardown() {
   clearTimeout(st.evictTimer);
   for (const { controller } of st.loading.values()) controller.abort();
   for (const tile of st.tiles.values()) freeTile(tile);
+  fading.clear();
   if (st.overview && !st.overview.destroyed) {
     st.overview.parent?.removeChild(st.overview);
     // The overview texture belongs to Foundry's texture cache, so leave it alone.
@@ -287,7 +333,40 @@ function addMesh(texture, layer, x, y, width, height) {
   mesh.height = height;
   canvas.primary.addChild(mesh);
   canvas.primary.sortDirty = true;
+  fadeIn(mesh);
   return mesh;
+}
+
+/* -------------------------------------------- */
+/*  Fading in                                    */
+/* -------------------------------------------- */
+
+const fading = new Set();
+let fadeTicking = false;
+
+function fadeIn(mesh) {
+  mesh.alpha = 0;
+  fading.add(mesh);
+  if (!fadeTicking) {
+    canvas.app.ticker.add(fadeTick);
+    fadeTicking = true;
+  }
+}
+
+function fadeTick() {
+  const step = canvas.app.ticker.deltaMS / FADE_MS;
+  for (const mesh of fading) {
+    if (mesh.destroyed) {
+      fading.delete(mesh);
+      continue;
+    }
+    mesh.alpha = Math.min(1, mesh.alpha + step);
+    if (mesh.alpha >= 1) fading.delete(mesh);
+  }
+  if (!fading.size) {
+    canvas.app.ticker.remove(fadeTick);
+    fadeTicking = false;
+  }
 }
 
 /* -------------------------------------------- */
@@ -566,7 +645,9 @@ function evict(capOnly) {
       for (let row = r.r0; row <= r.r1 && covered; row++) {
         for (let col = r.c0; col <= r.c1; col++) {
           const key = `${level}/${col}_${row}`;
-          if (!st.tiles.has(key) && !st.failed.has(key)) { covered = false; break; }
+          // A tile still fading in doesn't cover yet.
+          const tile = st.tiles.get(key);
+          if (tile ? tile.mesh.alpha < 1 : !st.failed.has(key)) { covered = false; break; }
         }
       }
     }
@@ -605,6 +686,85 @@ function evict(capOnly) {
     console.log(`${MODULE_ID} | freed ${freed.length} tiles, ${st.tiles.size} still loaded`);
     pumpQueue();
   }
+}
+
+/* -------------------------------------------- */
+/*  Scene Configuration                          */
+/* -------------------------------------------- */
+
+/**
+ * Add a "Tile map" field (the .dzi URL) under the background image, with a
+ * button that sizes the scene to the map and uses the overview as background.
+ */
+function addSceneConfigFields(app, html) {
+  const root = html instanceof HTMLElement ? html : html?.[0];
+  const scene = app.document;
+  if (!root || !scene || root.querySelector(`[name="flags.${MODULE_ID}.dzi"]`)) return;
+
+  const anchor = root.querySelector('[name="background.src"]')?.closest(".form-group");
+  const container = anchor?.parentElement ?? root.querySelector('.tab[data-tab="basics"]');
+  if (!container) return console.warn(`${MODULE_ID} | couldn't find where to add the Tile map field`);
+
+  const group = document.createElement("div");
+  group.className = "form-group";
+
+  const label = document.createElement("label");
+  label.textContent = "Tile map (.dzi)";
+
+  const fields = document.createElement("div");
+  fields.className = "form-fields";
+
+  let input;
+  if (customElements.get("file-picker")) {
+    input = document.createElement("file-picker");
+    input.setAttribute("type", "any");
+  } else {
+    input = document.createElement("input");
+    input.type = "text";
+  }
+  input.setAttribute("name", `flags.${MODULE_ID}.dzi`);
+  input.setAttribute("value", scene.flags?.[MODULE_ID]?.dzi ?? "");
+  input.setAttribute("placeholder", "https://…/map.dzi");
+
+  const fit = document.createElement("button");
+  fit.type = "button";
+  fit.innerHTML = '<i class="fa-solid fa-expand"></i> Fit scene to map';
+  fit.title = "Set the scene size to the map size, and the background to the map's overview image";
+  fit.addEventListener("click", () => fitSceneToMap(root, input).catch((err) => {
+    console.error(`${MODULE_ID} | couldn't read the tile map`, err);
+    ui.notifications.error(`Tile Cartography: couldn't read the tile map (${err.message}).`);
+  }));
+
+  const hint = document.createElement("p");
+  hint.className = "hint";
+  hint.textContent = "The .dzi file of a tile pyramid made by cut-tiles.sh. Leave empty to show the background "
+    + "image only. \"Fit scene to map\" fills in the size and a low-res background, used when tile maps are off.";
+
+  fields.append(input, fit);
+  group.append(label, fields, hint);
+  if (anchor) anchor.after(group);
+  else container.prepend(group);
+  app.setPosition?.({ height: "auto" });
+}
+
+/** Fill the Scene Configuration form with the map's size and overview image. */
+async function fitSceneToMap(root, input) {
+  const url = input.value?.trim();
+  if (!url) return ui.notifications.warn("Tile Cartography: choose the .dzi file first.");
+  const dzi = await loadDzi(url);
+  const set = (name, value) => {
+    const el = root.querySelector(`[name="${name}"]`);
+    if (!el) return false;
+    el.value = value;
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  };
+  const sized = set("width", dzi.width) & set("height", dzi.height);
+  const backed = set("background.src", tileUrl(dzi, overviewLevel(dzi), 0, 0));
+  ui.notifications.info(
+    `Tile Cartography: ${sized ? `size set to ${dzi.width}×${dzi.height}` : "couldn't find the size fields"}, `
+    + `${backed ? "overview set as background" : "couldn't find the background field"}. Save to apply.`
+  );
 }
 
 /* -------------------------------------------- */
