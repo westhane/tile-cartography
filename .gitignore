@@ -7,3 +7,6 @@
 
 # Build output
 module.zip
+
+# Local navigation shortcuts (e.g. GitHub Link.desktop)
+*.desktop
