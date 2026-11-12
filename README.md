@@ -2,11 +2,13 @@
 
 Foundry VTT (v13) module that shows a large scene background as a zoom-level tile pyramid, like a web map. Instead of loading one huge image, it loads a small overview first and streams in detail tiles as you pan and zoom.
 
-Status: **step 4 of 6**. Draws the overview level of a scene's tile pyramid over its background, then streams in the tiles that are on screen at the level that matches the current zoom. Set the pyramid per scene from the console:
+Status: **step 5 of 6**. Draws the overview level of a scene's tile pyramid over its background, streams in the tiles that are on screen at the level that matches the current zoom (loading ahead of drags and animated pans), and frees tiles that are no longer needed. Set the pyramid per scene from the console:
 
 ```js
 await canvas.scene.setFlag("tile-cartography", "dzi", "<url to .dzi>");
 ```
+
+To see what is loaded (tiles per level, approximate GPU memory), run `game.modules.get("tile-cartography").api.stats()`.
 
 ## Layout
 
@@ -37,7 +39,7 @@ Upload the whole output folder to the Forge Assets Library. Map images and tiles
 2. ✅ Draw a single overview image over the scene background.
 3. ✅ Load the visible detail tiles at one zoom level.
 4. ✅ Switch between zoom levels as you zoom.
-5. Unload tiles that go off screen.
+5. ✅ Unload tiles that go off screen.
 6. Polish: fade tiles in, add a settings panel, add an off switch with a low-res fallback background.
 
 ## Install
